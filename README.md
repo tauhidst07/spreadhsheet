@@ -1,152 +1,19 @@
-# SpreadsheetApp
+Task 1 — Sort & Filter
+Every column header has two controls:
 
-A modern web application built with React and Vite for creating and managing spreadsheets.
+Click the column letter (e.g. "A") to cycle sort: first click = A→Z ascending, second click = Z→A descending, third click = off. A ↑ or ↓ icon shows the active state
+Click the ▾ button next to the letter to open a filter dropdown. It shows every unique value in that column with checkboxes — uncheck values to hide those rows. The rows aren't deleted, just hidden. Formulas still calculate against original cell positions
 
-## Prerequisites
+Task 2 — Copy & Paste
 
-Before you begin, ensure you have the following installed on your system:
+Ctrl+C on a selected cell copies the computed value (so if A1 has =1+1, it copies 2) to your clipboard. The cell gets a dashed blue border
+Ctrl+V pastes whatever is in your clipboard starting at the selected cell. If you copy a range from Excel or Google Sheets, it pastes the whole grid because they use tab-separated format which parseTSV handles
+Ctrl+Z undoes the entire paste in one step (not cell by cell)
+Ctrl+Y redoes it
 
-- **Node.js** (version 18 or higher) - [Download](https://nodejs.org/)
-- **npm** (comes with Node.js) or **yarn**
-- **Git** - [Download](https://git-scm.com/)
+Task 3 — localStorage
 
-## Getting Started
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/tauhidst07/spreadhsheet.git
-cd SpreadsheetApp
-```
-
-### 2. Install Dependencies
-
-Install all required project dependencies:
-
-```bash
-npm install
-```
-
-Or if you prefer yarn:
-
-```bash
-yarn install
-```
-
-### 3. Run Development Server
-
-Start the development server with hot module replacement (HMR):
-
-```bash
-npm run dev
-```
-
-The application will be available at `http://localhost:5173`
-
-### 4. Build for Production
-
-Create an optimized production build:
-
-```bash
-npm run build
-```
-
-The build output will be in the `dist/` directory.
-
-### 5. Preview Production Build
-
-Preview the production build locally:
-
-```bash
-npm run preview
-```
-
-### 6. Lint Code
-
-Run ESLint to check for code quality issues:
-
-```bash
-npm run lint
-```
-
-## Project Structure
-
-```
-SpreadsheetApp/
-├── src/
-│   ├── App.jsx           # Main React component
-│   ├── App.css           # Application styles
-│   ├── main.jsx          # Application entry point
-│   ├── index.css         # Global styles
-│   ├── assets/           # Static assets (images, icons, etc.)
-│   └── engine/           # Core application logic
-│       └── core.js       # Engine core functionality
-├── public/               # Static files served as-is
-├── package.json          # Project dependencies and scripts
-├── vite.config.js        # Vite configuration
-├── eslint.config.js      # ESLint configuration
-├── index.html            # HTML entry point
-└── README.md             # This file
-```
-
-## Technologies Used
-
-- **React** - A JavaScript library for building user interfaces
-- **Vite** - A next-generation frontend build tool
-- **ESLint** - JavaScript linting utility
-- **CSS** - Styling and layout
-
-## Available Scripts
-
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start the development server with hot reload |
-| `npm run build` | Build the application for production |
-| `npm run preview` | Preview the production build locally |
-| `npm run lint` | Run ESLint to check code quality |
-
-## Development Workflow
-
-1. Create a new branch for your feature:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-2. Make your changes and ensure the code passes linting:
-   ```bash
-   npm run lint
-   ```
-
-3. Commit your changes:
-   ```bash
-   git commit -m "Add description of your changes"
-   ```
-
-4. Push to your fork and create a Pull Request
-
-## Browser Support
-
-This application works on all modern browsers that support ES2020+ JavaScript:
-
-- Chrome (latest)
-- Firefox (latest)
-- Safari (latest)
-- Edge (latest)
-
-## Troubleshooting
-
-### Dependencies won't install
-- Clear npm cache: `npm cache clean --force`
-- Delete `node_modules` and `package-lock.json`, then reinstall: `rm -rf node_modules package-lock.json && npm install`
-
-### Port 5173 already in use
-- The dev server will automatically try the next available port
-- Or specify a custom port: `npm run dev -- --port 3000`
-
-### Build fails
-- Ensure all dependencies are installed: `npm install`
-- Clear any build cache: `rm -rf dist`
-- Try rebuilding: `npm run build`
-
-
-
+Every time you change a cell or style, it auto-saves after 500ms silently in the background
+If you close the tab and reopen it, all your data and styles come back exactly as you left them
+Undo/redo history does not restore (fresh stack on each page load)
+Clicking ✕ All clears both the grid and the saved data
