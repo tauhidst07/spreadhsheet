@@ -11,6 +11,9 @@ import AiPanel from './ui/AiPanel.jsx'
 import { createEditStore } from './grid/editStore.js'
 import { measureText } from './grid/measure.js'
 import { perfStats, subscribePerf, installKeyLatencyProbe, resetKeyStats } from './ui/perfStats.js'
+import { executeQuery } from './ai/executor.js'
+import { readTable } from './ai/sheet.js'
+import { planFormat, applyFormat } from './ai/formatApplier.js'
 
 const TOTAL_ROWS = 100000
 const TOTAL_COLS = 200
@@ -253,7 +256,9 @@ export default function App() {
 
     // `?perf` exposes the engine to scripts/perf.mjs (production build measurements).
     useEffect(() => {
-        if (new URLSearchParams(window.location.search).has('perf')) window.__sheet = { engine, refresh: bump }
+        if (new URLSearchParams(window.location.search).has('perf')) {
+            window.__sheet = { engine, refresh: bump, perfStats, ai: { executeQuery, readTable, planFormat, applyFormat, measureText } }
+        }
     }, [engine])
 
     // Global shortcuts: undo/redo when no text field has focus, Ctrl+K anywhere.
