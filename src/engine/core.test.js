@@ -2,7 +2,9 @@
 // public engine API documented in DESIGN_NOTES.md.
 import { describe, it, expect } from 'vitest'
 import { createEngine } from './core.js'
-import { loadSampleSmall, loadSampleLarge } from '../fixtures/loadSample.js'
+import { loadSampleSmall, loadTsv } from '../fixtures/loadSample.js'
+import salesLarge from '../../fixtures/sales-large.tsv?raw'
+const loadSampleLarge = (engine) => loadTsv(engine, salesLarge)
 import { toDate } from './values.js'
 
 const A = (label) => {
