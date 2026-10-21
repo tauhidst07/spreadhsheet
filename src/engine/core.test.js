@@ -387,6 +387,25 @@ describe('challenge 2: sort and filter', () => {
     })
 })
 
+describe('used range', () => {
+    it('grows with edits, shrinks when content is removed, follows structure', () => {
+        const e = createEngine(20, 10)
+        expect(e.getUsedRange()).toBe(null)
+        e.setCell(2, 1, 'a')
+        expect(e.getUsedRange()).toEqual({ r1: 2, c1: 1, r2: 2, c2: 1 })
+        e.setCell(5, 4, 'b')
+        expect(e.getUsedRange()).toEqual({ r1: 2, c1: 1, r2: 5, c2: 4 })
+        e.setStyle(range('J20', 'J20'), { bold: true }) // styles alone do not count
+        expect(e.getUsedRange()).toEqual({ r1: 2, c1: 1, r2: 5, c2: 4 })
+        e.setCell(5, 4, '')
+        expect(e.getUsedRange()).toEqual({ r1: 2, c1: 1, r2: 2, c2: 1 })
+        e.insertRow(0)
+        expect(e.getUsedRange()).toEqual({ r1: 3, c1: 1, r2: 3, c2: 1 })
+        e.undo(); e.undo()
+        expect(e.getUsedRange()).toEqual({ r1: 2, c1: 1, r2: 5, c2: 4 })
+    })
+})
+
 describe('styles and freeze', () => {
     it('applies a style to a range as one undo step', () => {
         const e = createEngine(10, 10)

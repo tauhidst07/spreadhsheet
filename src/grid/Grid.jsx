@@ -396,7 +396,7 @@ export default function Grid({ engine, selection, editing, editStore, actions, a
                 const v = engine.getView(r, c)
                 out.push(
                     <div
-                        key={r * 1024 + c}
+                        key={`${r}:${c}`}
                         className={v.error ? 'gc err' : 'gc'}
                         style={{ left: pane.x(c), top: y, width: colLeft[c + 1] - colLeft[c], height: h, lineHeight: `${h - 1}px`, ...cellCss(v.style, v.error) }}
                     >

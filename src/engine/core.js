@@ -252,6 +252,9 @@ export function createEngine(initialRows = 50, initialCols = 50) {
     function writeRecords(changes) {
         const inverse = new Array(changes.length)
         const changedKeys = []
+        // The used range only grows while content is added; removing content
+        // may shrink it, which needs a full rescan later.
+        let used = usedCache.version === contentVersion ? usedCache.range : undefined
         for (let i = 0; i < changes.length; i++) {
             const [key, rec] = changes[i]
             const old = cells.get(key) ?? null
@@ -261,9 +264,17 @@ export function createEngine(initialRows = 50, initialCols = 50) {
             if (rec) cells.set(key, rec); else cells.delete(key)
             if (rec && rec.ast) registerFormula(key, rec.ast)
             const contentChanged = (old?.ast ?? old?.raw ?? '') !== (rec?.ast ?? rec?.raw ?? '') || (old?.bad ?? false) !== (rec?.bad ?? false)
-            if (contentChanged) changedKeys.push(key)
+            if (!contentChanged) continue
+            changedKeys.push(key)
+            if (used === undefined) continue
+            if (hasContent(rec)) used = extendRange(used, rowPosOf(rowIdOfKey(key)), colPosOf(colIdOfKey(key)))
+            else if (hasContent(old)) used = undefined
         }
-        if (changedKeys.length) { invalidate(changedKeys); contentVersion++ }
+        if (changedKeys.length) {
+            invalidate(changedKeys)
+            contentVersion++
+            if (used !== undefined) usedCache = { version: contentVersion, range: used }
+        }
         return inverse
     }
 
@@ -490,6 +501,13 @@ export function createEngine(initialRows = 50, initialCols = 50) {
     }
 
     // ── Used range ──
+
+    function extendRange(range, r, c) {
+        if (r < 0 || c < 0) return range
+        if (!range) return { r1: r, c1: c, r2: r, c2: c }
+        if (r >= range.r1 && r <= range.r2 && c >= range.c1 && c <= range.c2) return range
+        return { r1: Math.min(range.r1, r), c1: Math.min(range.c1, c), r2: Math.max(range.r2, r), c2: Math.max(range.c2, c) }
+    }
 
     function getUsedRange() {
         if (usedCache.version === contentVersion) return usedCache.range
