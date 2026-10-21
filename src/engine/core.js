@@ -21,6 +21,7 @@ import {
     parseFormula, serializeFormula, evaluate, mapRefs, visitRefs, isError, ERR,
 } from './formula.js'
 import { planLane } from './fill.js'
+import { prefixSums } from './layout.js'
 import {
     norm, toNum, toDate, parseLiteralNumber, numberToText, formatForDisplay, isTotalsLabel,
 } from './values.js'
@@ -38,6 +39,7 @@ export const DEFAULT_STYLE = Object.freeze({
     bg: 'white', color: '#202124', align: 'left', fontSize: 13, numberFormat: 'general',
 })
 const STYLE_KEYS = Object.keys(DEFAULT_STYLE)
+const EMPTY_VIEW = Object.freeze({ text: '', style: DEFAULT_STYLE, error: false })
 
 /** Keeps only non-default style properties; returns null when nothing is left. */
 export function compactStyle(style) {
@@ -463,6 +465,16 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         const text = textAt(row, col)
         const nf = rec.style?.numberFormat
         return nf ? formatForDisplay(text, nf) : text
+    }
+
+    /** Everything the grid needs to paint one cell, in one lookup. */
+    function getView(row, col) {
+        const rec = recordAt(row, col)
+        if (!rec) return EMPTY_VIEW
+        const text = textAt(row, col)
+        const style = rec.style ? { ...DEFAULT_STYLE, ...rec.style } : DEFAULT_STYLE
+        const error = rec.bad || (rec.ast !== null && isError(values.get(keyAt(row, col))))
+        return { text: rec.style?.numberFormat ? formatForDisplay(text, rec.style.numberFormat) : text, style, error }
     }
 
     function getStyle(row, col) {
@@ -961,6 +973,23 @@ export function createEngine(initialRows = 50, initialCols = 50) {
 
     const isRowHidden = (row) => hiddenRows.has(rowOrder[row])
 
+    // ── Geometry (prefix sums, cached per layout version) ──
+
+    let offsetsCache = null
+    /** { rowTop, colLeft }: rowTop[r] is the y of row r (hidden rows are 0 tall). */
+    function getOffsets() {
+        if (offsetsCache && offsetsCache.version === layoutVersion &&
+            offsetsCache.rowTop.length === rowOrder.length + 1 && offsetsCache.colLeft.length === colOrder.length + 1) {
+            return offsetsCache
+        }
+        offsetsCache = {
+            version: layoutVersion,
+            rowTop: prefixSums(rowOrder.length, getRowHeight),
+            colLeft: prefixSums(colOrder.length, getColWidth),
+        }
+        return offsetsCache
+    }
+
     // ── Sort (a physical edit: cell records move between rows) ──
 
     function sortBlockFor(col, selection) {
@@ -1107,6 +1136,8 @@ export function createEngine(initialRows = 50, initialCols = 50) {
         get frozenCols() { return frozenCols },
 
         getCell,
+        getView,
+        getOffsets,
         getDisplay,
         getText: textAt,
         getStyle,
