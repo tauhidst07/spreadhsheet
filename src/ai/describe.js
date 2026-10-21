@@ -1,4 +1,5 @@
 // Plain-words descriptions of AI actions, for result cards and previews.
+import { columnLabel } from '../engine/refs.js'
 
 const COLOUR_NAMES = {
     '#f0f0f0': 'grey', '#ffff99': 'yellow', '#99ffcc': 'green', '#ffcccc': 'red',
@@ -65,7 +66,7 @@ export function describeFormat(action, plan, columnNames = []) {
         lines.push(`${inside.length} column${inside.length > 1 ? 's' : ''}${formats ? ': number formats' : ''} — ` +
             inside.map(c => `${name(c.col)}: ${describeStyle(c.style)}`).join('; '))
     }
-    if (outside.length) lines.push(`ignored: ${outside.map(c => `column ${c.col + 1}`).join(', ')} (outside the ${columnNames.length}-column table)`)
+    if (outside.length) lines.push(`ignored: ${outside.map(c => `column ${columnLabel(c.col)}`).join(', ')} (outside the ${columnNames.length}-column table)`)
     if (action.totalsStyle) {
         lines.push(plan?.totalsDropped
             ? 'totals row: skipped — the last row is not a totals row'
