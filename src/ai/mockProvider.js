@@ -34,7 +34,27 @@ export function createMockProvider() {
         name: 'mock',
         async complete({ user }) {
             await new Promise(resolve => setTimeout(resolve, 150)) // pretend to be a network call
-            const hit = TABLE.get(normalize(user))
+            
+            // Extract user prompt if wrapped in context
+            let cleanUser = String(user || '')
+            const promptMatch = cleanUser.match(/User Prompt:\s*([^\n]+)/i)
+            if (promptMatch) {
+                cleanUser = promptMatch[1]
+            }
+
+            const normUser = normalize(cleanUser)
+            let hit = TABLE.get(normUser)
+
+            // If no exact match, search for substring / key containment (e.g. "total sales by region")
+            if (!hit && normUser) {
+                for (const [key, val] of TABLE.entries()) {
+                    if (key === normUser || key.includes(normUser) || normUser.includes(key)) {
+                        hit = val
+                        break
+                    }
+                }
+            }
+
             if (hit) return { text: wrap(hit), provider: 'mock' }
             return {
                 text: wrap({

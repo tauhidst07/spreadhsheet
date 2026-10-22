@@ -1,7 +1,6 @@
 // Loads a fixture TSV into the engine starting at A1.
-// Deliberately minimal: one setCell per cell, no styling, no type coercion.
-// You may replace this with your own import path. That is fine as long as
-// both "Load" buttons keep working.
+// Writes every cell in a single batched setRange so large fixtures
+// import in one pass (and as one undo step).
 import salesSmall from '../../fixtures/sales.tsv?raw'
 import salesLarge from '../../fixtures/sales-large.tsv?raw'
 
@@ -15,11 +14,16 @@ function loadTsv(engine, text) {
     const rows = parseTsv(text)
     const cols = Math.max(...rows.map(r => r.length))
     engine.ensureCapacity(rows.length + 20, cols + 5)
+    const updates = []
     for (let r = 0; r < rows.length; r++) {
         for (let c = 0; c < rows[r].length; c++) {
-            engine.setCell(r, c, rows[r][c])
+            const val = rows[r][c]
+            if (val !== undefined && val !== '') {
+                updates.push({ r, c, raw: val })
+            }
         }
     }
+    engine.setRange(updates, 'Load Sample')
     return { rows: rows.length, cols }
 }
 
