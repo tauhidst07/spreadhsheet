@@ -32,9 +32,21 @@ function wrap(action) {
 export function createMockProvider() {
     return {
         name: 'mock',
-        async complete({ user }) {
-            await new Promise(resolve => setTimeout(resolve, 150)) // pretend to be a network call
-            const hit = TABLE.get(normalize(user))
+        async complete({ user, prompt }) {
+            const isTest = Boolean(globalThis.process?.env?.VITEST)
+            if (!isTest) await new Promise(resolve => setTimeout(resolve, 150))
+            let q = prompt || ''
+            if (!q && user) {
+                const m = String(user).match(/(?:^|\n)User:\s*([\s\S]+)$/i)
+                q = m ? m[1] : user
+            }
+            const n = normalize(q)
+            let hit = TABLE.get(n)
+            if (!hit && n.length >= 10) {
+                for (const [k, v] of TABLE) {
+                    if (k.includes(n) || n.includes(k)) { hit = v; break }
+                }
+            }
             if (hit) return { text: wrap(hit), provider: 'mock' }
             return {
                 text: wrap({
