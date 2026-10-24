@@ -2,12 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>spreadsheetapp</title>
+    <title>Sheets</title>
+    <style>
+      /* App shell: paints the frame of the sheet before the script runs; React replaces it on mount. */
+      html, body, #root { height: 100%; margin: 0; }
+      body { font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #fff; color: #1f1f1f; overflow: hidden; }
+      .shell { display: grid; grid-template-rows: 46px 32px 1fr 26px; height: 100vh; }
+      .shell-bar { border-bottom: 1px solid #dadce0; display: flex; align-items: center; padding: 0 12px; font-weight: 600; font-size: 15px; }
+      .shell-bar b { color: #188038; margin-right: 6px; }
+      .shell-grid { background:
+        linear-gradient(#f3f4f6, #f3f4f6) 0 0 / 100% 26px no-repeat,
+        linear-gradient(#f3f4f6, #f3f4f6) 0 0 / 52px 100% no-repeat,
+        repeating-linear-gradient(to bottom, transparent 0 23px, #e2e3e5 23px 24px) 0 26px / 100% 100% no-repeat,
+        repeating-linear-gradient(to right, transparent 0 99px, #e2e3e5 99px 100px) 52px 0 / 100% 100% no-repeat; }
+      .shell-status { border-top: 1px solid #dadce0; color: #5f6368; font-size: 12px; padding: 0 12px; line-height: 26px; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="shell" aria-hidden="true"><div class="shell-bar"><b>▦</b>Sheets</div><div class="shell-bar"></div><div class="shell-grid"></div><div class="shell-status">Loading…</div></div></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

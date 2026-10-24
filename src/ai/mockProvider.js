@@ -5,8 +5,8 @@
 //
 // Graders run the whole eval set against this provider first, and only
 // then against a live one. Do not edit the fixtures to make tests pass.
-import queries from '../../fixtures/ai-eval/queries.json'
-import formats from '../../fixtures/ai-eval/format-prompts.json'
+import queries from '../../fixtures/ai-eval/queries.json' with { type: 'json' }
+import formats from '../../fixtures/ai-eval/format-prompts.json' with { type: 'json' }
 
 const normalize = (s) => String(s || '')
     .toLowerCase()
@@ -32,14 +32,14 @@ function wrap(action) {
 export function createMockProvider() {
     return {
         name: 'mock',
-        async complete({ user }) {
+        async complete({ user, prompt }) {
             await new Promise(resolve => setTimeout(resolve, 150)) // pretend to be a network call
-            const hit = TABLE.get(normalize(user))
+            const hit = TABLE.get(normalize(prompt ?? user))
             if (hit) return { text: wrap(hit), provider: 'mock' }
             return {
                 text: wrap({
                     type: 'clarify',
-                    question: 'The mock provider only knows the prompts listed in fixtures/ai-eval/. Set VITE_AI_PROVIDER=http and implement createHttpProvider() to ask anything else.',
+                    question: 'The mock provider only knows the prompts listed in fixtures/ai-eval/. Set AI_PROVIDER=http with an endpoint, key and model in .env.local to ask anything else.',
                 }),
                 provider: 'mock',
             }

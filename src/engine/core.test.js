@@ -40,3 +40,47 @@ describe('engine basics', () => {
         expect(engine.getCell(5, 0).computed).toBe(6)
     })
 })
+
+describe('fill, sort and undo', () => {
+    const sample = () => {
+        const engine = createEngine(100, 10)
+        engine.loadMatrix([['ID', 'Units', 'Price'], ['ORD-1001', '4', '$10.00'], ['ORD-1002', '2', '$5.00'], ['ORD-1003', '9', '$1.50'], ['Total', '15', '']])
+        return engine
+    }
+
+    it('continues a text+number series and undoes it in one step', () => {
+        const engine = sample()
+        engine.fillRange({ r1: 1, c1: 0, r2: 2, c2: 0 }, { r1: 1, c1: 0, r2: 6, c2: 0 })
+        expect(engine.getCell(5, 0).raw).toBe('ORD-1005')
+        engine.undo()
+        expect(engine.getCell(5, 0).raw).toBe('')
+    })
+
+    it('shifts relative references and pins absolute ones when filling', () => {
+        const engine = sample()
+        engine.setCell(1, 3, '=B2*$C$2')
+        engine.fillRange({ r1: 1, c1: 3, r2: 1, c2: 3 }, { r1: 1, c1: 3, r2: 3, c2: 3 })
+        expect(engine.getCell(3, 3).raw).toBe('=B4*$C$2')
+        expect(engine.getCell(3, 3).computed).toBe(90)
+    })
+
+    it('sorts below the header, keeps the totals row pinned and formulas with their rows', () => {
+        const engine = sample()
+        engine.setCell(1, 3, '=B2*2')
+        engine.fillRange({ r1: 1, c1: 3, r2: 1, c2: 3 }, { r1: 1, c1: 3, r2: 3, c2: 3 })
+        engine.sortRange(engine.getUsedRange(), 1, 'desc')
+        expect([1, 2, 3].map(r => engine.getCell(r, 0).raw)).toEqual(['ORD-1003', 'ORD-1001', 'ORD-1002'])
+        expect(engine.getCell(1, 3).computed).toBe(18)
+        expect(engine.getCell(4, 0).raw).toBe('Total')
+        engine.undo()
+        expect(engine.getCell(1, 0).raw).toBe('ORD-1001')
+    })
+
+    it('recalculates only the dependents of an edit', () => {
+        const engine = sample()
+        engine.setCell(1, 3, '=B2+1')
+        engine.setCell(1, 1, '40')
+        expect(engine.getCell(1, 3).computed).toBe(41)
+        expect(engine.lastRecalcCount).toBe(2)
+    })
+})

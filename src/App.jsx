@@ -1,446 +1,337 @@
-import { useState, useRef, useCallback, useMemo } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
-import { createEngine } from './engine/core.js'
-import { loadSampleSmall, loadSampleLarge } from './fixtures/loadSample.js'
+import { createEngine, DEFAULT_ROW_HEIGHT } from './engine/core.js'
+import { cellLabel, parseRangeLabel } from './engine/formula.js'
+import { toNum } from './engine/values.js'
+import { GridView, rangeOf } from './grid/GridView.js'
+import FilterMenu from './grid/FilterMenu.jsx'
+import Toolbar from './Toolbar.jsx'
+import { loadSample } from './fixtures/loadSample.js'
 
-const TOTAL_ROWS = 50
-const TOTAL_COLS = 50
+const AiPanel = lazy(() => import('./ai/AiPanel.jsx'))
+
+const SLICE_MS = 24
+const nextFrame = () => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)))
+const rangeLabel = r => (r.r1 === r.r2 && r.c1 === r.c2 ? cellLabel(r.r1, r.c1) : `${cellLabel(r.r1, r.c1)}:${cellLabel(r.r2, r.c2)}`)
+const cellsIn = r => (r.r2 - r.r1 + 1) * (r.c2 - r.c1 + 1)
 
 export default function App() {
-  // Engine instance is created once and reused across renders
-  // Note: The engine maintains its own internal state, so React state is only used for UI updates
-  const [engine] = useState(() => createEngine(TOTAL_ROWS, TOTAL_COLS))
-  const [, setVersion] = useState(0)
-  const [selectedCell, setSelectedCell] = useState(null)
-  const [editingCell, setEditingCell] = useState(null)
-  const [editValue, setEditValue] = useState('')
-  // Cell styles are stored separately from engine data
-  // Format: { "row,col": { bold: bool, italic: bool, ... } }
-  const [cellStyles, setCellStyles] = useState({})
-  const cellInputRef = useRef(null)
+  const [engine] = useState(() => createEngine(100000, 200))
+  const viewRef = useRef(null), hostRef = useRef(null), formulaRef = useRef(null), nameRef = useRef(null)
+  const sortRef = useRef({ col: -1, dir: '' })
+  const [sel, setSel] = useState({ ar: 0, ac: 0, fr: 0, fc: 0 })
+  const [, setTick] = useState(0)
+  const [busy, setBusy] = useState(null)
+  const [toast, setToast] = useState(null)
+  const [aiOpen, setAiOpen] = useState(false)
+  const [filterMenu, setFilterMenu] = useState(null)
+  const [summary, setSummary] = useState('')
 
-  const forceRerender = useCallback(() => setVersion(v => v + 1), [])
+  const notify = useCallback((message, kind = 'info') => setToast({ message, kind, id: Date.now() }), [])
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 3500); return () => clearTimeout(t) }, [toast])
 
-  // ────── Cell style helpers ──────
-
-  const getCellStyle = useCallback((row, col) => {
-    const key = `${row},${col}`
-    return cellStyles[key] || {
-      bold: false, italic: false, underline: false,
-      bg: 'white', color: '#202124', align: 'left', fontSize: 13
-    }
-  }, [cellStyles])
-
-  const updateCellStyle = useCallback((row, col, updates) => {
-    const key = `${row},${col}`
-    setCellStyles(prev => ({
-      ...prev,
-      [key]: { ...getCellStyle(row, col), ...updates }
-    }))
-  }, [getCellStyle])
-
-  // ────── Cell editing ──────
-
-  const startEditing = useCallback((row, col) => {
-    setSelectedCell({ r: row, c: col })
-    setEditingCell({ r: row, c: col })
-    const cellData = engine.getCell(row, col)
-    setEditValue(cellData.raw)
-    setTimeout(() => cellInputRef.current?.focus(), 0)
-  }, [engine])
-
-  const commitEdit = useCallback((row, col) => {
-    // Only commit if the value actually changed to avoid unnecessary recalculations
-    const currentCell = engine.getCell(row, col)
-    if (currentCell.raw !== editValue) {
-      engine.setCell(row, col, editValue)
-      forceRerender()
-    }
-    setEditingCell(null)
-  }, [engine, editValue, forceRerender])
-
-  const handleCellClick = useCallback((row, col) => {
-    if (editingCell && (editingCell.r !== row || editingCell.c !== col)) {
-      commitEdit(editingCell.r, editingCell.c)
-    }
-    if (!editingCell || editingCell.r !== row || editingCell.c !== col) {
-      startEditing(row, col)
-    }
-  }, [editingCell, commitEdit, startEditing])
-
-  // ────── Keyboard navigation ──────
-
-  const handleKeyDown = useCallback((event, row, col) => {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      commitEdit(row, col)
-      startEditing(Math.min(row + 1, engine.rows - 1), col)
-    } else if (event.key === 'Tab') {
-      event.preventDefault()
-      commitEdit(row, col)
-      startEditing(row, Math.min(col + 1, engine.cols - 1))
-    } else if (event.key === 'Escape') {
-      setEditValue(engine.getCell(row, col).raw)
-      setEditingCell(null)
-    } else if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      commitEdit(row, col)
-      startEditing(Math.min(row + 1, engine.rows - 1), col)
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      commitEdit(row, col)
-      startEditing(Math.max(row - 1, 0), col)
-    } else if (event.key === 'ArrowLeft') {
-      event.preventDefault()
-      commitEdit(row, col)
-      if (col > 0) {
-        startEditing(row, col - 1)
-      } else if (row > 0) {
-        startEditing(row - 1, engine.cols - 1)
-      }
-    } else if (event.key === 'ArrowRight') {
-      event.preventDefault()
-      commitEdit(row, col)
-      startEditing(row, Math.min(col + 1, engine.cols - 1))
-    }
-  }, [engine, commitEdit, startEditing])
-
-  // ────── Formula bar handlers ──────
-
-  const handleFormulaBarKeyDown = useCallback((event) => {
-    if (!editingCell) return
-    handleKeyDown(event, editingCell.r, editingCell.c)
-  }, [editingCell, handleKeyDown])
-
-  const handleFormulaBarFocus = useCallback(() => {
-    if (selectedCell && !editingCell) {
-      setEditingCell(selectedCell)
-      setEditValue(engine.getCell(selectedCell.r, selectedCell.c).raw)
-    }
-  }, [selectedCell, editingCell, engine])
-
-  const handleFormulaBarChange = useCallback((value) => {
-    if (!editingCell && selectedCell) setEditingCell(selectedCell)
-    setEditValue(value)
-  }, [editingCell, selectedCell])
-
-  // ────── Undo / Redo ──────
-
-  const handleUndo = useCallback(() => { if (engine.undo()) forceRerender() }, [engine, forceRerender])
-  const handleRedo = useCallback(() => { if (engine.redo()) forceRerender() }, [engine, forceRerender])
-
-  // ────── Formatting toggles ──────
-
-  const toggleBold = useCallback(() => {
-    if (!selectedCell) return
-    const style = getCellStyle(selectedCell.r, selectedCell.c)
-    updateCellStyle(selectedCell.r, selectedCell.c, { bold: !style.bold })
-  }, [selectedCell, getCellStyle, updateCellStyle])
-
-  const toggleItalic = useCallback(() => {
-    if (!selectedCell) return
-    const style = getCellStyle(selectedCell.r, selectedCell.c)
-    updateCellStyle(selectedCell.r, selectedCell.c, { italic: !style.italic })
-  }, [selectedCell, getCellStyle, updateCellStyle])
-
-  const toggleUnderline = useCallback(() => {
-    if (!selectedCell) return
-    const style = getCellStyle(selectedCell.r, selectedCell.c)
-    updateCellStyle(selectedCell.r, selectedCell.c, { underline: !style.underline })
-  }, [selectedCell, getCellStyle, updateCellStyle])
-
-  const changeFontSize = useCallback((size) => {
-    if (!selectedCell) return
-    updateCellStyle(selectedCell.r, selectedCell.c, { fontSize: size })
-  }, [selectedCell, updateCellStyle])
-
-  const changeAlignment = useCallback((align) => {
-    if (!selectedCell) return
-    updateCellStyle(selectedCell.r, selectedCell.c, { align })
-  }, [selectedCell, updateCellStyle])
-
-  const changeFontColor = useCallback((color) => {
-    if (!selectedCell) return
-    updateCellStyle(selectedCell.r, selectedCell.c, { color })
-  }, [selectedCell, updateCellStyle])
-
-  const changeBackgroundColor = useCallback((color) => {
-    if (!selectedCell) return
-    updateCellStyle(selectedCell.r, selectedCell.c, { bg: color })
-  }, [selectedCell, updateCellStyle])
-
-  // ────── Clear operations ──────
-
-  const clearSelectedCell = useCallback(() => {
-    if (!selectedCell) return
-    engine.setCell(selectedCell.r, selectedCell.c, '')
-    forceRerender()
-    // Remove style entry for cleared cell
-    // Note: This deletes the style object entirely - if you need to preserve default styles,
-    // you may want to set them explicitly rather than deleting
-    const key = `${selectedCell.r},${selectedCell.c}`
-    setCellStyles(prev => { const next = { ...prev }; delete next[key]; return next })
-    setEditValue('')
-  }, [selectedCell, engine, forceRerender])
-
-  const clearAllCells = useCallback(() => {
-    for (let r = 0; r < engine.rows; r++) {
-      for (let c = 0; c < engine.cols; c++) {
-        engine.setCell(r, c, '')
-      }
-    }
-    forceRerender()
-    setCellStyles({})
-    setSelectedCell(null)
-    setEditingCell(null)
-    setEditValue('')
-  }, [engine, forceRerender])
-
-  // ────── Sample data (fixtures/sales.tsv) ──────
-
-  const loadSample = useCallback((loader) => {
-    loader(engine)
-    forceRerender()
-    setSelectedCell({ r: 0, c: 0 })
-    setEditingCell(null)
-    setEditValue('')
-  }, [engine, forceRerender])
-
-  // ────── Row / Column operations ──────
-
-  const insertRow = useCallback(() => {
-    if (!selectedCell) return
-    engine.insertRow(selectedCell.r)
-    forceRerender()
-    setSelectedCell({ r: selectedCell.r + 1, c: selectedCell.c })
-  }, [selectedCell, engine, forceRerender])
-
-  const deleteRow = useCallback(() => {
-    if (!selectedCell) return
-    engine.deleteRow(selectedCell.r)
-    forceRerender()
-    if (selectedCell.r >= engine.rows) {
-      setSelectedCell({ r: engine.rows - 1, c: selectedCell.c })
-    }
-  }, [selectedCell, engine, forceRerender])
-
-  const insertColumn = useCallback(() => {
-    if (!selectedCell) return
-    engine.insertColumn(selectedCell.c)
-    forceRerender()
-    setSelectedCell({ r: selectedCell.r, c: selectedCell.c + 1 })
-  }, [selectedCell, engine, forceRerender])
-
-  const deleteColumn = useCallback(() => {
-    if (!selectedCell) return
-    engine.deleteColumn(selectedCell.c)
-    forceRerender()
-    if (selectedCell.c >= engine.cols) {
-      setSelectedCell({ r: selectedCell.r, c: engine.cols - 1 })
-    }
-  }, [selectedCell, engine, forceRerender])
-
-  // ────── Derived state ──────
-
-  const selectedCellStyle = useMemo(() => {
-    return selectedCell ? getCellStyle(selectedCell.r, selectedCell.c) : null
-  }, [selectedCell, getCellStyle])
-
-  const getColumnLabel = useCallback((col) => {
-    let label = ''
-    let num = col + 1
-    while (num > 0) {
-      num--
-      label = String.fromCharCode(65 + (num % 26)) + label
-      num = Math.floor(num / 26)
-    }
-    return label
+  /** Runs an engine mutation, then repaints the grid and the chrome once. */
+  const mutate = useCallback(fn => {
+    const result = fn()
+    viewRef.current?.refresh()
+    setTick(t => t + 1)
+    return result
   }, [])
 
-  const selectedCellLabel = selectedCell
-    ? `${getColumnLabel(selectedCell.c)}${selectedCell.r + 1}`
-    : 'No cell'
+  /**
+   * Runs an engine step generator time-sliced: small jobs finish inside the
+   * first slice with no visible state; large ones show progress, yield to the
+   * browser every ~24 ms and block input until done (one undo entry either way).
+   */
+  const busyRef = useRef(false)
+  const runJob = useCallback(async (label, steps) => {
+    if (busyRef.current) return false
+    busyRef.current = true
+    let next = steps.next(), sliceStart = performance.now(), shown = false
+    try {
+      while (!next.done) {
+        if (performance.now() - sliceStart > SLICE_MS) {
+          const pct = typeof next.value === 'number' ? ` ${Math.round(next.value * 100)}%` : ''
+          setBusy(`${label}${pct}`); shown = true
+          await nextFrame()
+          sliceStart = performance.now()
+        }
+        next = steps.next()
+      }
+    } finally {
+      busyRef.current = false
+      if (shown) setBusy(null)
+      viewRef.current?.refresh()
+      setTick(t => t + 1)
+    }
+    return next.value
+  }, [])
 
-  // Formula bar shows the raw formula text, not the computed value
-  // When editing, show the current editValue; otherwise show the cell's raw content
-  // Note: This is different from the cell display, which shows computed values
-  const formulaBarValue = editingCell
-    ? editValue
-    : (selectedCell ? engine.getCell(selectedCell.r, selectedCell.c).raw : '')
+  /** Short mutations that are always small (style of a range, sizes, filters). */
+  const guarded = useCallback(fn => (busyRef.current ? false : mutate(fn)), [mutate])
 
-  // ────── Render ──────
+  const resetSortCycle = () => { sortRef.current = { col: -1, dir: '' } }
+  const undo = useCallback(() => { resetSortCycle(); return runJob('Undoing…', engine.undoSteps()) }, [engine, runJob])
+  const redo = useCallback(() => { resetSortCycle(); return runJob('Redoing…', engine.redoSteps()) }, [engine, runJob])
+
+  const selectRange = useCallback((range, active = { r: range.r1, c: range.c1 }) => {
+    const view = viewRef.current
+    view.select({ ar: active.r, ac: active.c, fr: active.r === range.r1 ? range.r2 : range.r1, fc: active.c === range.c1 ? range.c2 : range.c1 })
+    view.scrollIntoView(active.r, active.c, true)
+  }, [])
+
+  const fill = useCallback((source, target) => runJob('Filling…', engine.fillRangeSteps(source, target)), [runJob, engine])
+
+  const sortColumn = useCallback(async (col, forced) => {
+    const prev = sortRef.current
+    const dir = forced ?? (prev.col !== col ? 'asc' : prev.dir === 'asc' ? 'desc' : prev.dir === 'desc' ? 'original' : 'asc')
+    const s = rangeOf(viewRef.current.sel), used = engine.getUsedRange()
+    if (!used) return notify('Nothing to sort yet')
+    const explicit = s.r2 > s.r1 && !(s.r1 === 0 && s.r2 >= engine.rows - 1)
+    const range = explicit ? { r1: s.r1, c1: 0, r2: s.r2, c2: used.c2 } : used
+    sortRef.current = { col, dir: dir === 'original' ? '' : dir }
+    const label = dir === 'original' ? 'Restoring original order…' : 'Sorting…'
+    await runJob(label, engine.sortRangeSteps(range, col, dir, { header: !explicit || s.r1 === 0 }))
+  }, [runJob, engine, notify])
+
+  const handlers = useRef(null)
+  handlers.current = { fill, sortColumn, undo, redo, notify, mutate, runJob }
+
+  // Mount the imperative grid once.
+  useEffect(() => {
+    const h = () => handlers.current
+    const view = new GridView(hostRef.current, engine, {
+      onSelect: s => setSel({ ...s }),
+      onCommit: (r, c, text) => h().mutate(() => engine.setCell(r, c, text)),
+      onMove: (dr, dc) => { const s = view.sel, r = s.ar + dr, c = s.ac + dc; view.select({ ar: r, ac: c, fr: r, fc: c }); view.scrollIntoView(view.sel.ar, view.sel.ac, true) },
+      onFill: (source, target) => h().fill(source, target),
+      onResizeColumn: (c, w) => h().mutate(() => engine.setColumnWidth(c, w)),
+      onResizeRow: (r, height) => h().mutate(() => engine.setRowHeight(r, height ?? DEFAULT_ROW_HEIGHT)),
+      onAutoFit: c => h().mutate(() => engine.autoFitColumn(c, (t, s) => view.measure(t, s))),
+      onFilterMenu: (col, at) => setFilterMenu({ col, at }),
+      onSortClick: col => h().sortColumn(col),
+      sortState: c => (sortRef.current.col === c ? sortRef.current.dir : ''),
+      onEditInput: text => { if (formulaRef.current && document.activeElement !== formulaRef.current) formulaRef.current.value = text ?? engine.getCell(view.sel.ar, view.sel.ac).raw },
+      isFormulaBar: node => node === formulaRef.current,
+      onKeyDown: e => { if (busyRef.current) e.preventDefault(); else keyDown(e, view) },
+      isBusy: () => busyRef.current,
+    })
+    viewRef.current = view
+    if (import.meta.env.VITE_MEASURE === '1') window.__sheet = { engine, view }
+    return () => view.destroy()
+    // keyDown reads everything through refs, so the grid mounts exactly once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine])
+
+  function keyDown(e, view) {
+    const s = view.sel, mod = e.ctrlKey || e.metaKey, key = e.key
+    const move = (dr, dc, extend) => {
+      let r = (extend ? s.fr : s.ar) + dr
+      const c = (extend ? s.fc : s.ac) + dc
+      if (dr) while (r > 0 && r < engine.rows - 1 && engine.isRowHidden(r)) r += Math.sign(dr)
+      if (extend) view.select({ ...s, fr: r, fc: c }); else view.select({ ar: r, ac: c, fr: r, fc: c })
+      view.scrollIntoView(extend ? view.sel.fr : view.sel.ar, extend ? view.sel.fc : view.sel.ac, true)
+    }
+    const arrows = { ArrowDown: [1, 0], ArrowUp: [-1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }
+    if (arrows[key]) {
+      e.preventDefault()
+      const [dr, dc] = arrows[key]
+      if (mod) {
+        const used = engine.getUsedRange() ?? { r2: 0, c2: 0 }
+        const r = dr > 0 ? used.r2 : dr < 0 ? 0 : (e.shiftKey ? s.fr : s.ar), c = dc > 0 ? used.c2 : dc < 0 ? 0 : (e.shiftKey ? s.fc : s.ac)
+        if (e.shiftKey) view.select({ ...s, fr: r, fc: c }); else view.select({ ar: r, ac: c, fr: r, fc: c })
+        view.scrollIntoView(r, c, true)
+      } else move(dr, dc, e.shiftKey)
+      return
+    }
+    if (key === 'PageDown' || key === 'PageUp') { e.preventDefault(); move((key === 'PageDown' ? 1 : -1) * view.pageRows(), 0, e.shiftKey); return }
+    if (key === 'Home' && mod) { e.preventDefault(); view.select({ ar: 0, ac: 0, fr: 0, fc: 0 }); view.scrollIntoView(0, 0, true); return }
+    if (key === 'End' && mod) {
+      e.preventDefault()
+      const used = engine.getUsedRange() ?? { r2: 0, c2: 0 }
+      view.select({ ar: used.r2, ac: used.c2, fr: used.r2, fc: used.c2 }); view.scrollIntoView(used.r2, used.c2); return
+    }
+    if (key === 'Home') { e.preventDefault(); view.select({ ar: s.ar, ac: 0, fr: s.ar, fc: 0 }); view.scrollIntoView(s.ar, 0, true); return }
+    if (key === 'Tab') { e.preventDefault(); move(0, e.shiftKey ? -1 : 1, false); return }
+    if (key === 'Enter' || key === 'F2') { e.preventDefault(); view.startEdit(); return }
+    if (key === 'Delete' || key === 'Backspace') {
+      e.preventDefault()
+      const r = rangeOf(s)
+      handlers.current.runJob('Clearing…', engine.clearRangeSteps(r))
+      return
+    }
+    if (mod) {
+      const k = key.toLowerCase()
+      if (k === 'a') { e.preventDefault(); const used = engine.getUsedRange(); if (used) view.select({ ar: 0, ac: 0, fr: used.r2, fc: used.c2 }); return }
+      if (k === 'd' || k === 'r') {
+        e.preventDefault()
+        const r = rangeOf(s), source = k === 'd' ? { ...r, r2: r.r1 } : { ...r, c2: r.c1 }
+        if (cellsIn(r) > 1) handlers.current.fill(source, r)
+        return
+      }
+      if (k === 'b' || k === 'i' || k === 'u') {
+        e.preventDefault()
+        const prop = { b: 'bold', i: 'italic', u: 'underline' }[k]
+        handlers.current.mutate(() => engine.setStyle(rangeOf(s), { [prop]: !engine.getCellStyle(s.ar, s.ac)[prop] }))
+        return
+      }
+      return
+    }
+    if (key.length === 1 && !e.altKey) { e.preventDefault(); view.startEdit(key) }
+  }
+
+  // Global shortcuts: Ctrl+K (AI panel), Ctrl+Z / Ctrl+Y (undo/redo) outside text inputs.
+  useEffect(() => {
+    const onKey = e => {
+      const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase()
+      if (mod && k === 'k') { e.preventDefault(); setAiOpen(open => !open); return }
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName ?? '')
+      if (!mod || typing) return
+      if (k === 'z') { e.preventDefault(); if (e.shiftKey) handlers.current.redo(); else handlers.current.undo() }
+      else if (k === 'y') { e.preventDefault(); handlers.current.redo() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Formula bar and name box follow the active cell (uncontrolled inputs, no per-keystroke state).
+  useEffect(() => {
+    const view = viewRef.current
+    if (formulaRef.current && !view?.editing) formulaRef.current.value = engine.getCell(sel.ar, sel.ac).raw
+    if (nameRef.current && document.activeElement !== nameRef.current) nameRef.current.value = rangeLabel(rangeOf(sel))
+  })
+
+  // Selection summary is computed after paint so it never delays input.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      const r = rangeOf(sel), used = engine.getUsedRange()
+      if (!used || cellsIn(r) < 2) return setSummary('')
+      const r2 = Math.min(r.r2, used.r2), c2 = Math.min(r.c2, used.c2)
+      let count = 0, nums = 0, sum = 0
+      for (let row = r.r1; row <= r2; row++) {
+        if (engine.isRowHidden(row)) continue
+        for (let c = r.c1; c <= c2; c++) {
+          const v = engine.getValue(row, c)
+          if (v === '') continue
+          count++
+          const n = typeof v === 'number' ? v : toNum(v)
+          if (n !== null && typeof v !== 'object') { nums++; sum += n }
+        }
+      }
+      setSummary(count ? `Count ${count.toLocaleString('en-US')}${nums ? ` · Sum ${parseFloat(sum.toFixed(2)).toLocaleString('en-US')} · Average ${parseFloat((sum / nums).toFixed(2)).toLocaleString('en-US')}` : ''}` : '')
+    }, 60)
+    return () => clearTimeout(id)
+  }, [sel, engine, busy])
+
+  const load = async which => {
+    setBusy('Loading sample…')
+    try {
+      const rows = await loadSample(which)
+      await nextFrame()
+      mutate(() => engine.loadMatrix(rows))
+      resetSortCycle()
+      viewRef.current.select({ ar: 0, ac: 0, fr: 0, fc: 0 })
+      viewRef.current.scrollIntoView(0, 0, true)
+      notify(`Loaded ${rows.length.toLocaleString('en-US')} rows`)
+    } catch (error) {
+      notify(`Could not load the sample: ${error.message}`, 'error')
+    } finally {
+      setBusy(null)
+      viewRef.current?.focus()
+    }
+  }
+
+  const jumpTo = text => {
+    const range = parseRangeLabel(text.trim())
+    if (!range || range.r2 >= engine.rows || range.c2 >= engine.cols) { notify(`"${text}" is not a cell or range`, 'error'); return }
+    selectRange(range)
+    viewRef.current.focus()
+  }
+
+  const range = rangeOf(sel)
+  const style = engine.getCellStyle(sel.ar, sel.ac)
+  const used = engine.getUsedRange()
+  const hidden = engine.hiddenRows()
+  const dataRows = used ? used.r2 : 0
+  const empty = !used
+
+  const actions = {
+    undo, redo,
+    canUndo: engine.canUndo(), canRedo: engine.canRedo(),
+    style,
+    setStyle: patch => guarded(() => engine.setStyle(range, patch)),
+    insertRow: () => guarded(() => engine.insertRow(range.r1)),
+    // A whole-column selection deletes only the active row (never the entire sheet), and vice versa.
+    deleteRow: () => guarded(() => (viewRef.current.isFullColumns() ? engine.deleteRow(sel.ar) : engine.deleteRow(range.r1, range.r2 - range.r1 + 1))),
+    insertColumn: () => guarded(() => engine.insertColumn(range.c1)),
+    deleteColumn: () => guarded(() => (viewRef.current.isFullRows() ? engine.deleteColumn(sel.ac) : engine.deleteColumn(range.c1, range.c2 - range.c1 + 1))),
+    frozenRows: engine.frozenRows, frozenCols: engine.frozenCols,
+    toggleFreezeRow: () => mutate(() => engine.setFrozen(engine.frozenRows ? 0 : 1, engine.frozenCols)),
+    toggleFreezeCol: () => mutate(() => engine.setFrozen(engine.frozenRows, engine.frozenCols ? 0 : 1)),
+    hasFilters: !!hidden || engine.getFilters().size > 0,
+    clearFilters: () => mutate(() => engine.clearFilters()),
+    loadSmall: () => load('small'), loadLarge: () => load('large'),
+    openAi: () => setAiOpen(true),
+    busy: !!busy,
+  }
 
   return (
-    <div className="app-wrapper">
-      <div className="app-header">
-        <h2 className="app-title">📊 Spreadsheet App</h2>
+    <div className="app">
+      <header className="app-header">
+        <div className="brand"><span className="brand-mark" aria-hidden="true">▦</span> Sheets</div>
+        <Toolbar {...actions} />
+      </header>
+      <div className="formula-bar">
+        <input ref={nameRef} className="name-box" aria-label="Name box" defaultValue="A1" spellCheck={false}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); jumpTo(e.currentTarget.value) } else if (e.key === 'Escape') { e.currentTarget.value = rangeLabel(range); viewRef.current.focus() } }}
+          onFocus={e => e.currentTarget.select()} />
+        <span className="fx" aria-hidden="true">fx</span>
+        <input ref={formulaRef} className="formula-bar-input" aria-label="Formula bar" spellCheck={false} placeholder="Enter a value or a formula such as =SUM(J2:J32)"
+          onFocus={e => viewRef.current.setEditText(e.currentTarget.value)}
+          onInput={e => viewRef.current.setEditText(e.currentTarget.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); viewRef.current.commitEdit(1, 0) }
+            else if (e.key === 'Tab') { e.preventDefault(); viewRef.current.commitEdit(0, 1) }
+            else if (e.key === 'Escape') { e.preventDefault(); viewRef.current.cancelEdit(); e.currentTarget.value = engine.getCell(sel.ar, sel.ac).raw }
+          }}
+          onBlur={e => { if (viewRef.current.editing && e.relatedTarget !== viewRef.current.editor) viewRef.current.commitEdit(0, 0) }} />
       </div>
-
-      <div className="main-content">
-
-        {/* ── Toolbar ── */}
-        <div className="toolbar">
-          <div className="toolbar-group">
-            <button className={`toolbar-btn bold-btn ${selectedCellStyle?.bold ? 'active' : ''}`} onClick={toggleBold} title="Bold">B</button>
-            <button className={`toolbar-btn italic-btn ${selectedCellStyle?.italic ? 'active' : ''}`} onClick={toggleItalic} title="Italic">I</button>
-            <button className={`toolbar-btn underline-btn ${selectedCellStyle?.underline ? 'active' : ''}`} onClick={toggleUnderline} title="Underline">U</button>
-          </div>
-
-          <div className="toolbar-group">
-            <span className="toolbar-label">Size:</span>
-            <select className="toolbar-select" value={selectedCellStyle?.fontSize || 13} onChange={(e) => changeFontSize(parseInt(e.target.value))}>
-              {[8, 10, 11, 12, 13, 14, 16, 18, 20, 24].map(s => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="toolbar-group">
-            <button className={`align-btn ${selectedCellStyle?.align === 'left' ? 'active' : ''}`} onClick={() => changeAlignment('left')} title="Align Left">⬤←</button>
-            <button className={`align-btn ${selectedCellStyle?.align === 'center' ? 'active' : ''}`} onClick={() => changeAlignment('center')} title="Align Center">⬤</button>
-            <button className={`align-btn ${selectedCellStyle?.align === 'right' ? 'active' : ''}`} onClick={() => changeAlignment('right')} title="Align Right">⬤→</button>
-          </div>
-
-          <div className="toolbar-group">
-            <span className="toolbar-label">Text:</span>
-            <input
-              type="color"
-              value={selectedCellStyle?.color || '#000000'}
-              onChange={(e) => changeFontColor(e.target.value)}
-              title="Font color"
-              style={{ width: '32px', height: '32px', border: '1px solid #dadce0', cursor: 'pointer', borderRadius: '4px' }}
-            />
-          </div>
-
-          <div className="toolbar-group">
-            <span className="toolbar-label">Fill:</span>
-            <select className="toolbar-select" value={selectedCellStyle?.bg || 'white'} onChange={(e) => changeBackgroundColor(e.target.value)}>
-              <option value="white">White</option>
-              <option value="#ffff99">Yellow</option>
-              <option value="#99ffcc">Green</option>
-              <option value="#ffcccc">Red</option>
-              <option value="#cce5ff">Blue</option>
-              <option value="#e0ccff">Purple</option>
-              <option value="#ffd9b3">Orange</option>
-              <option value="#f0f0f0">Gray</option>
-            </select>
-          </div>
-
-          <div className="toolbar-group">
-            <button className="toolbar-btn" onClick={handleUndo} disabled={!engine.canUndo()} title="Undo">↶ Undo</button>
-            <button className="toolbar-btn" onClick={handleRedo} disabled={!engine.canRedo()} title="Redo">↷ Redo</button>
-          </div>
-
-          <div className="toolbar-group">
-            <button className="toolbar-btn" onClick={insertRow} title="Insert Row">+ Row</button>
-            <button className="toolbar-btn" onClick={deleteRow} title="Delete Row">- Row</button>
-            <button className="toolbar-btn" onClick={insertColumn} title="Insert Column">+ Col</button>
-            <button className="toolbar-btn" onClick={deleteColumn} title="Delete Column">- Col</button>
-          </div>
-
-          <div className="toolbar-group">
-            <button className="toolbar-btn danger" onClick={clearSelectedCell}>✕ Cell</button>
-            <button className="toolbar-btn danger" onClick={clearAllCells}>✕ All</button>
-          </div>
-
-          <div className="toolbar-group">
-            <button className="toolbar-btn" onClick={() => loadSample(loadSampleSmall)} title="Load fixtures/sales.tsv (33 rows) at A1">⬇ Sample 33</button>
-            <button className="toolbar-btn" onClick={() => loadSample(loadSampleLarge)} title="Load fixtures/sales-large.tsv (~3,000 rows) at A1">⬇ Sample 3k</button>
-          </div>
+      <main className="workspace">
+        <div className="grid-wrap">
+          <div ref={hostRef} className="grid-root" />
+          {empty && !busy && (
+            <div className="empty-state">
+              <p className="empty-title">This sheet is empty</p>
+              <p>Start typing, or load sample data</p>
+              <div className="empty-actions">
+                <button type="button" className="btn primary" onClick={actions.loadSmall}>Load sales.tsv (33 rows)</button>
+                <button type="button" className="btn" onClick={actions.loadLarge}>Load sales-large.tsv (3k rows)</button>
+              </div>
+            </div>
+          )}
+          {busy && <div className="busy" role="status"><span className="spinner" aria-hidden="true" />{busy}</div>}
         </div>
-
-        {/* ── Formula Bar ── */}
-        <div className="formula-bar">
-          <span className="formula-bar-label">{selectedCellLabel}</span>
-          <input
-            className="formula-bar-input"
-            value={formulaBarValue}
-            onChange={(e) => handleFormulaBarChange(e.target.value)}
-            onKeyDown={handleFormulaBarKeyDown}
-            onFocus={handleFormulaBarFocus}
-            placeholder="Select a cell then type, or enter a formula like =SUM(A1:A5)"
-          />
-        </div>
-
-        {/* ── Grid ── */}
-        <div className="grid-scroll">
-          <table className="grid-table">
-            <thead>
-              <tr>
-                <th className="col-header-blank"></th>
-                {Array.from({ length: engine.cols }, (_, colIndex) => (
-                  <th key={colIndex} className="col-header">
-                    {getColumnLabel(colIndex)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {Array.from({ length: engine.rows }, (_, rowIndex) => (
-                <tr key={rowIndex}>
-                  <td className="row-header">{rowIndex + 1}</td>
-                  {Array.from({ length: engine.cols }, (_, colIndex) => {
-                    const isSelected = selectedCell?.r === rowIndex && selectedCell?.c === colIndex
-                    const isEditing = editingCell?.r === rowIndex && editingCell?.c === colIndex
-                    const cellData = engine.getCell(rowIndex, colIndex)
-                    const style = cellStyles[`${rowIndex},${colIndex}`] || {}
-                    const displayValue = cellData.error
-                      ? cellData.error
-                      : (cellData.computed !== null && cellData.computed !== '' ? String(cellData.computed) : cellData.raw)
-
-                    return (
-                      <td
-                        key={colIndex}
-                        className={`cell ${isSelected ? 'selected' : ''}`}
-                        style={{ background: style.bg || 'white' }}
-                        onMouseDown={(e) => { e.preventDefault(); handleCellClick(rowIndex, colIndex) }}
-                      >
-                        {isEditing ? (
-                          <input
-                            autoFocus
-                            className="cell-input"
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            onBlur={() => commitEdit(rowIndex, colIndex)}
-                            onKeyDown={(e) => handleKeyDown(e, rowIndex, colIndex)}
-                            ref={isSelected ? cellInputRef : undefined}
-                            style={{
-                              fontWeight: style.bold ? 'bold' : 'normal',
-                              fontStyle: style.italic ? 'italic' : 'normal',
-                              textDecoration: style.underline ? 'underline' : 'none',
-                              color: style.color || '#202124',
-                              fontSize: (style.fontSize || 13) + 'px',
-                              textAlign: style.align || 'left',
-                              background: style.bg || 'white',
-                            }}
-                          />
-                        ) : (
-                          <div
-                            className={`cell-display align-${style.align || 'left'} ${cellData.error ? 'error' : ''}`}
-                            style={{
-                              fontWeight: style.bold ? 'bold' : 'normal',
-                              fontStyle: style.italic ? 'italic' : 'normal',
-                              textDecoration: style.underline ? 'underline' : 'none',
-                              color: cellData.error ? '#d93025' : (style.color || '#202124'),
-                              fontSize: (style.fontSize || 13) + 'px',
-                            }}
-                          >
-                            {displayValue}
-                          </div>
-                        )}
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <p className="footer-hint">
-          Click a cell to edit · Enter/Tab/Arrow keys to navigate · Formulas: =A1+B1 · =SUM(A1:A5) · =AVG(A1:A5) · =MAX(A1:A5) · =MIN(A1:A5)
-        </p>
-      </div>
+        {aiOpen && (
+          <Suspense fallback={<aside className="ai-panel ai-loading">Loading assistant…</aside>}>
+            <AiPanel engine={engine} view={viewRef.current} selection={rangeLabel(range)} onClose={() => { setAiOpen(false); viewRef.current.focus() }}
+              onChange={() => { viewRef.current.refresh(); setTick(t => t + 1) }} />
+          </Suspense>
+        )}
+      </main>
+      <footer className="status-bar">
+        <span>{busy ?? 'Ready'}</span>
+        {hidden && <span className="status-filter">{(dataRows - hidden.size).toLocaleString('en-US')} of {dataRows.toLocaleString('en-US')} rows</span>}
+        <span className="status-spacer" />
+        {summary && <span>{summary}</span>}
+        <span className="status-muted">{rangeLabel(range)}</span>
+      </footer>
+      {filterMenu && (
+        <FilterMenu engine={engine} col={filterMenu.col} at={filterMenu.at}
+          onClose={() => { setFilterMenu(null); viewRef.current.focus() }}
+          onApply={filter => { mutate(() => engine.setFilter(filterMenu.col, filter)); setFilterMenu(null); viewRef.current.focus() }}
+          onSort={dir => { sortColumn(filterMenu.col, dir); setFilterMenu(null) }} />
+      )}
+      {toast && <div className={`toast ${toast.kind}`} role="alert">{toast.message}</div>}
     </div>
   )
 }
